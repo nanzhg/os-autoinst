@@ -18,7 +18,7 @@ use distribution;
 use Net::SSH2;
 use testapi qw(get_var get_required_var check_var set_var);
 use backend::svirt qw(SERIAL_CONSOLE_DEFAULT_PORT SERIAL_TERMINAL_DEFAULT_DEVICE SERIAL_TERMINAL_DEFAULT_PORT SERIAL_USER_TERMINAL_DEFAULT_DEVICE SERIAL_USER_TERMINAL_DEFAULT_PORT);
-use Mojo::File qw(tempdir path);
+use Mojo::File qw(tempdir tempfile path);
 use Mojo::Util qw(scope_guard);
 
 my $dir = tempdir("/tmp/$FindBin::Script-XXXX");
@@ -641,12 +641,15 @@ subtest 'Method consoles::sshVirtsh::add_disk()' => sub {
             my $filename = 'my_cdrom_file_' . $dev_id . '.iso';
             set_var(VMWARE_NFS_DATASTORE => 'nfs_data_store');
             @last_ssh_commands = ();
+            @last_ssh_args = ();
             $svirt->add_disk({cdrom => 1, dev_id => $dev_id, file => '/my/path/to/this/file/' . $filename});
             my $tmp_file = "$vmware_openqa_datastore$filename." . $svirt->name . '.part';
-            like $last_ssh_commands[0], qr%cp\s+"/vmfs/volumes/nfs_data_store/iso/$filename"\s+"\Q$tmp_file\E"%, "Copy iso to temporary file in $vmware_openqa_datastore";
-            like $last_ssh_commands[0], qr%mv\s+"\Q$tmp_file\E"\s+"$vmware_openqa_datastore$filename"%, 'Temporary file renamed into place so the copy is atomic';
-            like $last_ssh_commands[0], qr%mkdir\s+"$vmware_openqa_datastore$filename\.copying"%, 'Right to copy claimed so jobs arriving together do not all transfer the image';
-            unlike $last_ssh_commands[0], qr/lsof/, 'No guessing from a process list whether someone else is copying needed anymore';
+            is $last_ssh_commands[0], 'sh -s', 'Copy script passed via stdin as ESXi limits the length of a command';
+            my $script = {@{$last_ssh_args[0]}}->{stdin};
+            like $script, qr%cp\s+"/vmfs/volumes/nfs_data_store/iso/$filename"\s+"\Q$tmp_file\E"%, "Copy iso to temporary file in $vmware_openqa_datastore";
+            like $script, qr%mv\s+"\Q$tmp_file\E"\s+"$vmware_openqa_datastore$filename"%, 'Temporary file renamed into place so the copy is atomic';
+            like $script, qr%mkdir\s+"$vmware_openqa_datastore$filename\.copying"%, 'Right to copy claimed so jobs arriving together do not all transfer the image';
+            unlike $script, qr/lsof/, 'No guessing from a process list whether someone else is copying needed anymore';
 
             svirt_xml_validate($svirt,
                 disk_device => 'cdrom',
@@ -1045,7 +1048,7 @@ subtest 'Test routine consoles::sshVirtsh::provide_image_vmware_in_ds' => sub {
         my $input_file2 = path('vmware-mock-1-image.iso');
         my $input_file2_xz = path($input_file2 . '.xz');
         $console_mock->redefine(run_cmd => sub ($self, $cmd, %args) {
-                push @last_run_commands, $cmd;
+                push @last_run_commands, $args{stdin};
                 0;
         });
         my $n = 0;
@@ -1095,9 +1098,10 @@ subtest 'Test routine consoles::sshVirtsh::provide_image_vmware_in_ds' => sub {
         my $file_xz_i = path($file2_xz)->copy_to($my_test_dir_iso);
         my $file_xz_h = path($file_xz)->copy_to($my_test_dir_hdd);
         $console_mock->redefine(run_cmd => sub ($self, $cmd, %args) {
-                push @last_run_commands, $cmd;
+                push @last_run_commands, $args{stdin};
                 # run shell script in local host.
-                my $out = qx($cmd);
+                my $stdin = tempfile->spew($args{stdin});
+                my $out = qx($cmd < "$stdin");
                 ($? >> 8);
         });
         # pre-cleanup dest. file xz

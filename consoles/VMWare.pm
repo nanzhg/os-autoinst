@@ -405,7 +405,9 @@ sub provide_image_in_datastore ($svirt, $input_file, $vmware_openqa_datastore, %
     echo "Done: origin:" $file_origin* " ; dest.:" $dest_image*
     EOF
 
-    my $ret = $svirt->run_cmd($cmd, domain => 'sshVMwareServer');
+    # passed via stdin as ESXi limits the length of a command, a longer one fails with
+    # "/bin/sh: File too large" before the shell even starts
+    my $ret = $svirt->run_cmd('sh -s', stdin => $cmd, domain => 'sshVMwareServer');
     croak "Error on VMware image $input_file preparation." if $ret;
     return $dest_image;
 }
@@ -438,7 +440,8 @@ sub copy_image_to_datastore ($svirt, $name, $backingfile, $file_basename, %args)
     $copy_image
     fi
     EOF
-    my $retval = $svirt->run_cmd($cmd, domain => 'sshVMwareServer', timeout => $copy_timeout);
+    # passed via stdin as ESXi limits the length of a command
+    my $retval = $svirt->run_cmd('sh -s', stdin => $cmd, domain => 'sshVMwareServer', timeout => $copy_timeout);
     die "Can't copy VMware image $file_basename" if $retval;
     return unless $backingfile;
     # Power VM off, delete its disk image, and create it again.

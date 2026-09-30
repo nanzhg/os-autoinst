@@ -102,6 +102,7 @@ throws_ok { $baseclass->handle_command({cmd => 'power'}) } qr/not implemented/, 
 subtest 'SSH utilities' => sub {
     my $ssh_expect = {username => 'root', password => 'password', hostname => 'foo.bar', port => undef};
     my ($fail_on_channel_call, $fail_on_read2);
+    my @stdin_chunks;
     my $ssh_auth_ok = 1;
     my $ssh_obj_data = {};    # used to store Net::SSH2 fake data per object
     my $ssh_connect_error;
@@ -178,6 +179,12 @@ subtest 'SSH utilities' => sub {
                     $mock_channel->mock(blocking => sub { return shift->{ssh}->blocking(shift) });
                     $mock_channel->mock(pty => sub { return 1; });
                     $mock_channel->mock(send_eof => sub { return 1; });
+                    # accepts only a few bytes per call like a channel with a small window
+                    $mock_channel->mock(write => sub ($self, $data) {
+                            return 0 if $data =~ /^unwritable/;
+                            push @stdin_chunks, substr $data, 0, 4;
+                            return length $stdin_chunks[-1];
+                    });
                     $mock_channel->mock(exit_status => sub { shift->{exit_status}; });
                     $mock_channel->mock(ext_data => sub ($self, $v) { $self->{ext_data} = $v; });
                     $mock_channel->mock(close => sub { return 1; });
@@ -267,6 +274,11 @@ subtest 'SSH utilities' => sub {
     ($fail_on_read2, @net_ssh2_error) = ();
     @output = $baseclass->run_ssh_cmd('test foo', %ssh_creds, timeout => 100, wantarray => 1);
     is_deeply \@output, [0, '', ''], 'command successful exit without output';
+    is $baseclass->run_ssh_cmd('test sh', %ssh_creds, stdin => "echo foo\necho bar\n"), 0, 'command with stdin successful exit';
+    is join('', @stdin_chunks), "echo foo\necho bar\n", 'stdin written completely although the channel takes only part of it per write';
+    @net_ssh2_error = (-7, 'LIBSSH2_ERROR_SOCKET_SEND', 'Unable to send data');
+    throws_ok { $baseclass->run_ssh_cmd('test sh', %ssh_creds, stdin => 'unwritable') } qr/Unable to send data/, 'failing to write stdin is fatal error';
+    @net_ssh2_error = ();
 
     # Create a SSH session implecit with `run_ssh_cmd()`
     $ssh_expect->{password} = '2+3=5';

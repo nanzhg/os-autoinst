@@ -1305,11 +1305,15 @@ sub check_ssh_serial ($self, $fh = undef, $write = undef) {
 
    $ret = run_ssh_cmd($cmd [, username => ?][, password => ?][,host => ?][,timeout => undef]);
    ($ret, $stdout, $stderr) = run_ssh_cmd($cmd [, username => ?][, password => ?][,host => ?][,timeout => undef], wantarray => 1);
+   $ret = run_ssh_cmd('sh -s', stdin => $script);
 
    The timeout is in seconds and defaults to SSH_COMMAND_TIMEOUT_S. The timeout is enforced for each individual
    operation, e.g. sending the command and reading its output as it is produced. That means the total runtime
    of the command is allowed to be higher as long as the command can be sent in time and produces new output
    frequently enough.
+
+   The optional stdin is written to the standard input of the command. Pass long scripts this way to a shell,
+   as the remote host limits the length of the command, e.g. ESXi fails with "/bin/sh: File too large".
 
 =cut
 
@@ -1318,7 +1322,13 @@ sub run_ssh_cmd ($self, $cmd, %args) {
     $args{keep_open} //= 1;
 
     bmwqemu::log_call(cmd => $cmd, %{$self->hide_password(%args)});
+    my $stdin = delete $args{stdin} // '';
     my ($ssh, $chan) = $self->run_ssh($cmd, %args);
+    while (length $stdin) {
+        my $written = $chan->write($stdin);
+        $ssh->die_with_error(qq{Unable to write to the standard input of "$cmd"}) unless $written;
+        substr $stdin, 0, $written, '';
+    }
     $chan->send_eof;
 
     my ($stdout, $stderr) = ('', '');

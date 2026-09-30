@@ -27,7 +27,7 @@ use Mojo::Message::Response;
 use Mojo::IOLoop::Server;
 use Mojo::Server::Daemon;
 use Scalar::Util qw(blessed);
-use Mojo::File qw(tempdir path);
+use Mojo::File qw(tempdir tempfile path);
 use Digest::SHA;
 
 use consoles::VMWare;
@@ -303,8 +303,14 @@ subtest 'VMware images are verified against their published checksum before publ
     my $digest = Digest::SHA->new(256)->addfile($source->to_string)->hexdigest;
     my $last_output;
     # stands in for the sshVirtsh console, running the generated script on the local host
+    my ($last_cmd, $last_stdin);
     my $svirt = Test::MockObject->new->set_always(name => 'openQA-SUT-1');
-    $svirt->mock(run_cmd => sub ($self, $cmd, %args) { $last_output = qx{($cmd) 2>&1}; $? >> 8 });
+    $svirt->mock(run_cmd => sub ($self, $cmd, %args) {
+            ($last_cmd, $last_stdin) = ($cmd, $args{stdin});
+            my $stdin = tempfile->spew($args{stdin} // '');
+            $last_output = qx{($cmd) < "$stdin" 2>&1};
+            $? >> 8;
+    });
     $bmwqemu::vars{ISO} = "/var/lib/openqa/share/factory/iso/$iso";
     my $provide = sub { consoles::VMWare::provide_image_in_datastore($svirt, $source, $vmware_openqa_datastore) };
 
@@ -315,6 +321,14 @@ subtest 'VMware images are verified against their published checksum before publ
         is $dest->slurp, $source->slurp, 'published image matches the source';
         like $last_output, qr/Verified .*against its published checksum/, 'verification is reported';
         is_deeply [glob "$dest.*.part"], [], 'no temporary file left behind';
+    };
+
+    subtest 'the script is passed via stdin as ESXi limits the length of a command' => sub {
+        $dest->remove;
+        $bmwqemu::vars{CHECKSUM_ISO} = $digest;
+        lives_ok { $provide->() } 'image provided';
+        is $last_cmd, 'sh -s', 'the command stays short however long the paths are';
+        like $last_stdin, qr/Checksum mismatch for \Q$source\E/, 'the script is the standard input';
     };
 
     subtest 'mismatching checksum leaves the destination untouched' => sub {
