@@ -35,6 +35,20 @@ is $real_vnc_obj->hostname, 'localhost', 'parameters passed to VNC console (1)';
 is $real_vnc_obj->port, 42, 'parameters passed to VNC console (2)';
 is $c->disable_vnc_stalls, 0, 'disabling VNC stalls returns 0 (or at least something serializable)';
 is $real_vnc_obj->check_vnc_stalls, 0, 'checking for VNC stalls is now disabled';
+
+subtest 'reconnecting reuses the VMware handler and closes the previous connection' => sub {
+    my $vmware_handler = Test::MockObject->new;
+    open my $previous_socket, '<', \'';
+    $c->{vnc}->{_vmware_handler} = $vmware_handler;
+    $c->{vnc}->socket($previous_socket);
+    my $handler_on_login;
+    $vnc_mock->redefine(login => sub ($vnc_obj, @) { $handler_on_login = $vnc_obj->{_vmware_handler} });
+    stderr_like { $real_vnc_obj = $c->connect_remote({hostname => 'localhost', port => 42}) } qr/Establishing VNC connection/, 'can reconnect';
+    ok !$previous_socket->opened, 'socket of previous connection closed';
+    is $handler_on_login, $vmware_handler, 'VMware handler of previous connection available on login';
+    is $real_vnc_obj->{_vmware_handler}, $vmware_handler, 'VMware handler kept on new connection';
+};
+
 $c->{vnc} = $vnc;    # swap real VNC object with fake one
 $vnc->set_true('update_framebuffer', 'send_update_request');
 is $c->request_screen_update, undef, 'can call request_screen_update';

@@ -29,7 +29,12 @@ sub connect_remote ($self, $args) {
 
     die q{Need parameters 'hostname' and 'port'} unless $args->{hostname} && $args->{port};
     bmwqemu::diag "Establishing VNC connection to $args->{hostname}:$args->{port}";
+    # close the previous connection and hand its VMware handler over so the previous
+    # dewebsockify process is terminated before a new one is started on the same port
+    my $vmware_handler = $self->{vnc} ? $self->{vnc}->{_vmware_handler} : undef;
+    $self->disable;
     $self->{vnc} = consoles::VNC->new($args);
+    $self->{vnc}->{_vmware_handler} = $vmware_handler if $vmware_handler;
     $self->{vnc}->login($args->{connect_timeout});
     return $self->{vnc};
 }
